@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
+	"io"
+	"log"
+	"os"
+
 	"educationalsp/analysis"
 	"educationalsp/lsp"
 	"educationalsp/rpc"
-	"encoding/json"
-	"log"
-	"os"
 )
 
 func main() {
@@ -18,6 +20,7 @@ func main() {
 	scanner.Split(rpc.Split)
 
 	state := analysis.NewState()
+	writer := os.Stdout
 
 	for scanner.Scan() {
 		msg := scanner.Bytes()
@@ -27,11 +30,11 @@ func main() {
 			continue
 		}
 
-		handleMessage(logger, state, method, contents)
+		handleMessage(logger, writer, state, method, contents)
 	}
 }
 
-func handleMessage(logger *log.Logger, state analysis.State, method string, contents []byte) {
+func handleMessage(logger *log.Logger, writer io.Writer, state analysis.State, method string, contents []byte) {
 	logger.Printf("Recieved msg with method: %s", method)
 
 	switch method {
@@ -47,10 +50,7 @@ func handleMessage(logger *log.Logger, state analysis.State, method string, cont
 
 		// hey, let's reply
 		msg := lsp.NewInitializeResponse(request.ID)
-		reply := rpc.EncodeMessage(msg)
-
-		writer := os.Stdout
-		writer.Write([]byte(reply))
+		writeResponse(writer, msg)
 
 		logger.Print("Sent the reply")
 	case "textDocument/didOpen":
@@ -71,11 +71,27 @@ func handleMessage(logger *log.Logger, state analysis.State, method string, cont
 		for _, change := range request.Params.ContentChanges {
 			state.UpdateDocument(request.Params.TextDocument.URI, change.Text)
 		}
+	case "textDocument/hover":
+		var request lsp.HoverRequest
+		if err := json.Unmarshal(contents, &request); err != nil {
+			logger.Printf("textDocument/hover: %s", err)
+		}
+
+		// create a response
+		response := state.Hover(request.ID, request.Params.TextDocument.URI, request.Params.Position)
+		// write it back
+		writeResponse(writer, response)
+
 	}
 }
 
+func writeResponse(writer io.Writer, msg any) {
+	reply := rpc.EncodeMessage(msg)
+	writer.Write([]byte(reply))
+}
+
 func getLogger(filename string) *log.Logger {
-	logfile, err := os.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0666)
+	logfile, err := os.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o666)
 	if err != nil {
 		panic("bad file")
 	}
